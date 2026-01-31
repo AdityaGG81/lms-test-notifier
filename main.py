@@ -1,12 +1,14 @@
 import requests
 import json
 import os
-import time
 import ssl
 import urllib3
 from datetime import datetime
 
-# ================= SSL FIX =================
+# ================= SSL LEGACY FIX =================
+import urllib3.contrib.pyopenssl
+urllib3.contrib.pyopenssl.inject_into_urllib3()
+
 ssl._create_default_https_context = ssl._create_unverified_context
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -17,7 +19,7 @@ PASSWORD = os.getenv("LMS_PASSWORD")
 
 CLIENT_ID = "2Mp4P7aMBAPPBRSQCjZj1NlXeAO"
 
-NTFY_TOPIC = "lms-test-alert-12345"  # change this to something unique
+NTFY_TOPIC = "lms-test-alert-12345"
 NTFY_URL = f"https://ntfy.sh/{NTFY_TOPIC}"
 
 SEEN_FILE = "seen_tests.json"
@@ -37,21 +39,15 @@ STANDARD_ID = "2i396B1MdY3gOsjXIv0B8lJKv9r"
 DIVISION_ID = "2UCD3VlHbJzoDCXGFF1eXgDnPGJ"
 USER_ID = "2UnIOW2MU3QtyqXiOfgdyhiyfSE"
 
-# ==========================================
-
 
 def within_college_hours():
     now = datetime.now()
-    return 8 <= now.hour < 15  # 8AM to 3PM
+    return 8 <= now.hour < 15
 
 
 def send_ntfy(title, message):
-    headers = {
-        "Title": title,
-        "Priority": "5",
-        "Tags": "alarm_clock"
-    }
-    requests.post(NTFY_URL, data=message.encode("utf-8"), headers=headers, verify=False)
+    headers = {"Title": title}
+    requests.post(NTFY_URL, data=message.encode(), headers=headers, verify=False)
 
 
 def load_seen():
@@ -88,7 +84,7 @@ def login_and_get_token():
     token = r.headers.get("Authorization")
 
     if not token:
-        raise Exception("❌ Token not found")
+        raise Exception("Token not found")
 
     print("✅ Token OK")
     return token
@@ -118,19 +114,15 @@ def fetch_tests(token, subject_id):
     r = requests.post(url, json=payload, headers=headers, verify=False)
     data = r.json()
 
-    if "error" in data and data["error"]:
-        if data["error"].get("type") == "NOT_FOUND":
-            return []
-        else:
-            print("API error:", data["error"])
-            return []
+    if data.get("error"):
+        return []
 
     return data.get("result", {}).get("testData", [])
 
 
 def main():
     if not within_college_hours():
-        print("⏰ Outside college hours. Exiting.")
+        print("Outside college hours")
         return
 
     token = login_and_get_token()
@@ -143,34 +135,25 @@ def main():
         for t in tests:
             test_obj = t.get("test", {})
             test_id = test_obj.get("testId")
-
             if not test_id:
                 continue
 
             name = test_obj.get("testName")
             start = test_obj.get("startTime") or test_obj.get("testStartDateTime")
             end = test_obj.get("endTime") or test_obj.get("testEndDateTime")
-            subject = t.get("subjects", {}).get("subjectName", "Unknown Subject")
+            subject = t.get("subjects", {}).get("subjectName", "Unknown")
 
             if test_id not in seen:
                 seen.add(test_id)
                 new_found = True
-
-                msg = (
-                    f"📝 New Test Detected\n\n"
-                    f"Test: {name}\n"
-                    f"Subject: {subject}\n"
-                    f"Start: {start}\n"
-                    f"End: {end}"
-                )
-
+                msg = f"📝 New Test\n{name}\n{subject}\n{start} → {end}"
                 print(msg)
-                send_ntfy("New Test Detected", msg)
+                send_ntfy("New Test", msg)
 
     save_seen(seen)
 
     if not new_found:
-        print("No new tests.")
+        print("No new tests")
 
 
 if __name__ == "__main__":
