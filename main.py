@@ -2,14 +2,22 @@ import requests
 import json
 import os
 import time
+import ssl
+import urllib3
+from datetime import datetime
+
+# ================= SSL FIX =================
+ssl._create_default_https_context = ssl._create_unverified_context
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # ================= CONFIG =================
 
-USERNAME = os.environ["LMS_USERNAME"]
-PASSWORD = os.environ["LMS_PASSWORD"]
+USERNAME = os.getenv("LMS_USERNAME")
+PASSWORD = os.getenv("LMS_PASSWORD")
+
 CLIENT_ID = "2Mp4P7aMBAPPBRSQCjZj1NlXeAO"
 
-NTFY_TOPIC = "lms-test-alert"  # change to your own random topic
+NTFY_TOPIC = "lms-test-alert-12345"  # change this to something unique
 NTFY_URL = f"https://ntfy.sh/{NTFY_TOPIC}"
 
 SEEN_FILE = "seen_tests.json"
@@ -32,13 +40,18 @@ USER_ID = "2UnIOW2MU3QtyqXiOfgdyhiyfSE"
 # ==========================================
 
 
+def within_college_hours():
+    now = datetime.now()
+    return 8 <= now.hour < 15  # 8AM to 3PM
+
+
 def send_ntfy(title, message):
     headers = {
         "Title": title,
         "Priority": "5",
         "Tags": "alarm_clock"
     }
-    requests.post(NTFY_URL, data=message.encode("utf-8"), headers=headers)
+    requests.post(NTFY_URL, data=message.encode("utf-8"), headers=headers, verify=False)
 
 
 def load_seen():
@@ -55,6 +68,7 @@ def save_seen(seen):
 
 def login_and_get_token():
     url = "https://era.mkcl.org/NewLMSFramework2021/o/mql"
+
     payload = {
         "LoginService": {
             "userName": USERNAME,
@@ -70,11 +84,11 @@ def login_and_get_token():
         "Service-Header": "LoginService"
     }
 
-    r = requests.post(url, json=payload, headers=headers)
+    r = requests.post(url, json=payload, headers=headers, verify=False)
     token = r.headers.get("Authorization")
 
     if not token:
-        raise Exception("Token not found")
+        raise Exception("❌ Token not found")
 
     print("✅ Token OK")
     return token
@@ -101,7 +115,7 @@ def fetch_tests(token, subject_id):
         "Content-Type": "application/json"
     }
 
-    r = requests.post(url, json=payload, headers=headers)
+    r = requests.post(url, json=payload, headers=headers, verify=False)
     data = r.json()
 
     if "error" in data and data["error"]:
@@ -115,6 +129,10 @@ def fetch_tests(token, subject_id):
 
 
 def main():
+    if not within_college_hours():
+        print("⏰ Outside college hours. Exiting.")
+        return
+
     token = login_and_get_token()
     seen = load_seen()
     new_found = False
@@ -123,17 +141,16 @@ def main():
         tests = fetch_tests(token, subject_id)
 
         for t in tests:
-            test_obj = t.get("test", t)
-
+            test_obj = t.get("test", {})
             test_id = test_obj.get("testId")
-            name = test_obj.get("testName")
-            start = test_obj.get("startTime") or test_obj.get("testStartDateTime")
-            end = test_obj.get("endTime") or test_obj.get("testEndDateTime")
-
-            subject = t.get("subjects", {}).get("subjectName", "Unknown Subject")
 
             if not test_id:
                 continue
+
+            name = test_obj.get("testName")
+            start = test_obj.get("startTime") or test_obj.get("testStartDateTime")
+            end = test_obj.get("endTime") or test_obj.get("testEndDateTime")
+            subject = t.get("subjects", {}).get("subjectName", "Unknown Subject")
 
             if test_id not in seen:
                 seen.add(test_id)
@@ -150,7 +167,6 @@ def main():
                 print(msg)
                 send_ntfy("New Test Detected", msg)
 
-    # ✅ ALWAYS save after loop
     save_seen(seen)
 
     if not new_found:
